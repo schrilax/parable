@@ -1,0 +1,100 @@
+#!/bin/bash
+#SBATCH --partition=debug
+#SBATCH --time=00:30:00
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=12
+#SBATCH --exclusive
+#SBATCH --mem=48000
+#SBATCH --job-name="DHC_hadoop"
+#SBATCH --output=DHC-%J.out
+##SBATCH --mail-user=suchismi@buffalo.edu
+##SBATCH --mail-type=ALL
+##SBATCH --requeue
+#Specifies that the job will be requeued after a node failure.
+#The default is that the job will not be requeued.
+#
+#This SLURM script is modified version of the SDSC script
+# found in /util/myhadoop/example/hadoop-2.6.0.
+# cdc July 8, 2015
+#
+echo "SLURM_JOBID="$SLURM_JOBID
+echo "SLURM_JOB_NODELIST"=$SLURM_JOB_NODELIST
+echo "SLURM_NNODES"=$SLURM_NNODES
+echo "SLURMTMPDIR="$SLURMTMPDIR
+
+echo "working directory = "$SLURM_SUBMIT_DIR
+
+module load myhadoop/0.40a
+module load java/1.8.0_45
+module load hadoop/2.6.0
+module list
+echo "JAVA_HOME="$JAVA_HOME
+echo "MH_HOME="$MH_HOME
+echo "HADOOP_HOME="$HADOOP_HOME
+echo "Setting HADOOP to use SLURMTMPDIR on the local disk"
+export MH_SCRATCH_DIR=$SLURMTMPDIR
+echo "MH_SCRATCH_DIR="$MH_SCRATCH_DIR
+#### Set this to the directory where Hadoop configs should be generated
+# Don't change the name of this variable (HADOOP_CONF_DIR) as it is
+# required by Hadoop - all config files will be picked up from here
+#
+# Make sure that this is accessible to all nodes
+export HADOOP_CONF_DIR=$SLURM_SUBMIT_DIR/config-$SLURM_JOBID
+echo "MyHadoop config directory="$HADOOP_CONF_DIR
+### Set up the configuration
+# Make sure number of nodes is the same as what you have requested from PBS
+# usage: $myhadoop-configure.sh -h
+# this is the non-persistent mode
+NPROCS=`srun --nodes=${SLURM_NNODES} bash -c 'hostname' |wc -l`
+
+echo "-------Setting up the configuration for MyHadoop"
+$MH_HOME/bin/myhadoop-configure.sh 
+
+echo "-------Starting HDFS ---"
+$HADOOP_HOME/sbin/start-dfs.sh
+
+echo "-------Starting YARN ---"
+$HADOOP_HOME/sbin/start-yarn.sh
+
+#### Format HDFS, if this is the first time or not a persistent instance
+echo "-------Showing Report ---"
+#$HADOOP_HOME/bin/hadoop dfsadmin -report
+
+echo "-------Creating input directory ---"
+$HADOOP_HOME/bin/hdfs --config $HADOOP_CONF_DIR dfs -mkdir /input
+
+echo "-------Copying input file to HDFS ---"
+$HADOOP_HOME/bin/hdfs --config $HADOOP_CONF_DIR dfs -put ./diabetes.csv /input/
+
+echo "-------Creating jars directory ---"
+$HADOOP_HOME/bin/hdfs --config $HADOOP_CONF_DIR dfs -mkdir /jars
+
+echo "-------Copying requisite helper libraries to HDFS ---"
+$HADOOP_HOME/bin/hdfs --config $HADOOP_CONF_DIR dfs -put ./weka.jar /jars/
+
+echo "-------Creating output directory ---"
+$HADOOP_HOME/bin/hdfs --config $HADOOP_CONF_DIR dfs -mkdir /output
+
+echo "-------Listing contents of input directory ---"
+$HADOOP_HOME/bin/hdfs --config $HADOOP_CONF_DIR dfs -ls /input
+
+echo "-------Listing contents of jars directory ---"
+$HADOOP_HOME/bin/hdfs --config $HADOOP_CONF_DIR dfs -ls /jars
+
+echo "-------Starting execution  ---"
+$HADOOP_HOME/bin/hadoop --config $HADOOP_CONF_DIR jar dhc.jar DistHierCluster /input output 2
+
+echo "-------Listing contents of output directory---"
+$HADOOP_HOME/bin/hdfs --config $HADOOP_CONF_DIR dfs -ls output
+
+echo "-------Copying output from HDFS to local FS ---"
+$HADOOP_HOME/bin/hdfs --config $HADOOP_CONF_DIR dfs -get output ./myoutput-$SLURM_JOBID
+
+echo "-------Stopping YARN ---"
+$HADOOP_HOME/sbin/stop-yarn.sh
+
+echo "-------Starting HDFS ---"
+$HADOOP_HOME/sbin/stop-dfs.sh
+
+#### Clean up the working directories after job completion
+$MH_HOME/bin/myhadoop-cleanup.sh
